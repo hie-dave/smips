@@ -1,0 +1,16 @@
+{
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "smips download",
+			"type": "python",
+			"request": "launch",
+			"program": "${workspaceFolder}/smips_download.py",
+			"console": "integratedTerminal",
+			"justMyCode": true
+		}
+	]
+}
