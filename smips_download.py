@@ -1,26 +1,17 @@
 #!/usr/bin/env python
 #%pip install owslib shapely matplotlib
 
-from owslib.wps import WebProcessingService, ComplexDataInput, monitorExecution
-from owslib import wps
-import matplotlib
-from matplotlib import pyplot
-from shapely.geometry import shape
-import json
+from owslib.wps import WebProcessingService, ComplexDataInput
+from typing import Callable
 import pandas as pd
-import rasterio
-import logging
-import sys
-import io
-from ipyleaflet import Map, GeoJSON, basemaps
-import datetime
+import datetime, io, logging, sys
+
 import smips_sites
 from smips_common import *
-from typing import Callable
 
 _ENDPOINT="https://funcwps.ternlandscapes.org.au/wps/"
 _TEMPORAL_DRILL = "temporalDrill"
-_SLEEP = 100 # Sleep interval in ms
+_SLEEP = 1000 # Sleep interval in ms
 
 _MIME_GEO_JSON = "application/vnd.geo+json"
 _SCHEMA_BASE = "http://geojson.org/geojson-spec.html"
@@ -43,6 +34,12 @@ _LAYER_SMINDEX = "SMindex"
 
 # Layer used to download ET data. Must be used with AET dataset.
 _LAYER_ET = "ETa"
+
+# Asynchronous process execution mode.
+_MODE_ASYNC = "async"
+
+# Synchronouse process execution mode.
+_MODE_SYNC = "sync"
 
 # Date format used to pass dates to the PyWPS server
 _API_DATE_FORMAT = r"%Y-%m-%d"
@@ -67,49 +64,49 @@ _logger.addHandler(_handler)
 # Define a connection to the server.
 _server = WebProcessingService(_ENDPOINT, verbose=False)
 
-def describe_server(server: WebProcessingService):
+def _describe_server(server: WebProcessingService):
 	"""
 	List all processes and operations supported by the srever. 
 	"""
-	print('WPS Server: type            = %s' % server.identification.type)
-	print('WPS Server: title           = %s' % server.identification.title)
-	print('WPS Server: abstract        = %s\n' % server.identification.abstract)
+	print('WPS Server: type        = %s' % server.identification.type)
+	print('WPS Server: title       = %s' % server.identification.title)
+	print('WPS Server: abstract    = %s\n' % server.identification.abstract)
 
 	for operation in server.operations:
 		print('WPS Operation: name     = %s' % operation.name)
-	print("\n")
 
 	for process in server.processes:
+		print("\n", end = "")
 		print('WPS Process: identifier = %s' % process.identifier)
 		print("WPS Process: title      = %s" % process.title)
-		print("WPS Process: abstract   = %s\n" % process.abstract)
+		print("WPS Process: abstract   = %s" % process.abstract)
 
-def describe_process(server, process_name):
+def _describe_process(server: WebProcessingService, process_name: str):
 	"""
 	Describe the process on the server with the specified name.
-	"""
-	process = server.describeprocess(server, process_name)
 
-	print('WPS Process: identifier         = %s' % process.identifier)
-	print('WPS Process: title              = %s' % process.title)
-	print('WPS Process: abstract           = %s\n' % process.abstract)
+	@param server: The server.
+	@param process_name: Name of the process.
+	"""
+	process = server.describeprocess(process_name)
+
+	print('WPS Process: identifier     = %s' % process.identifier)
+	print('WPS Process: title          = %s' % process.title)
+	print('WPS Process: abstract       = %s\n' % process.abstract)
 
 	for input in process.dataInputs:
+		print("\n", end = "")
 		print("Process input: identifier   = %s" % input.identifier)
 		print("Process input: data type    = %s" % input.dataType)
 		print("Process input: minOccurs    = %d" % input.minOccurs)
-		print("Process input: maxOccurs    = %d\n" % input.maxOccurs)
+		print("Process input: maxOccurs    = %d" % input.maxOccurs)
 
 	for output in process.processOutputs:
+		print("\n", end = "")
 		print("Process output: identifier  = %s" % output.identifier)
-		print("Process output: data type   = %s\n" % output.dataType)
+		print("Process output: data type   = %s" % output.dataType)
 
-# Optional - visualise shapes.
-# m = Map(basemap=basemaps.OpenStreetMap.Mapnik, center=[-25.128, 135.588], zoom=4)
-# m.add_layer(GeoJSON(data=json.loads(MY_POLYGON)))
-# m
-
-def get_schema(schema_type: str) -> str:
+def _get_schema(schema_type: str) -> str:
 	"""
 	Get a schema for the given schema type.
 
@@ -117,11 +114,25 @@ def get_schema(schema_type: str) -> str:
 	"""
 	return "%s#%s" % (_SCHEMA_BASE, schema_type)
 
-def get_geo_json(lon: float, lat: float):
+def _get_geo_json(lon: float, lat: float):
 	"""
 	Get a GeoJSON representation of the specified latitude and longitude.
 	"""
 	return '{ "type": "Point", "coordinates": [%.2f, %.2f] }' % (lon, lat)
+
+def describe_server():
+	"""
+	List all processes and operations supported by the srever. 
+	"""
+	_describe_server(_server)
+
+def describe_process(process_name: str):
+	"""
+	Describe the process on the server with the specified name.
+
+	@param process_name: Name of the process.
+	"""
+	_describe_process(_server, process_name)
 
 def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	, pcb: Callable[[float], None]):
@@ -134,10 +145,10 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	@param pcb: A progress-reporting function which accepts one argument (current progress as a percentage).
 	"""
 
-	schema = get_schema(_SCHEMA_POINT)
+	schema = _get_schema(_SCHEMA_POINT)
 
 	# Create request.
-	polygon = get_geo_json(lon, lat)
+	polygon = _get_geo_json(lon, lat)
 	point = ComplexDataInput(polygon, mimeType = _MIME_GEO_JSON, schema = schema)
 
 	start_str = start.strftime(_API_DATE_FORMAT)
@@ -146,9 +157,11 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	# Submit request (will execute asynchronously).
 	resp = _server.execute(
 		_TEMPORAL_DRILL,
-		mode="async",
-		inputs=[("datasetId", f"{_DATASET_SMIPS}:{_LAYER_SW}"), ("point", point), ("startDate", start_str), ("endDate", end_str)],
+		mode = _MODE_ASYNC,
+		lineage = True,
+		inputs=[("datasetId", f"{_DATASET_SMIPS}:{_LAYER_SW}"), ("startDate", start_str), ("endDate", end_str), ("point", point)],
 		output=[("csv", False, "text/csv")]  # Get stats as embedded file in result
+		# output = [("download_link", False, None)]
 	)
 
 	# Wait for request to complete.
@@ -159,20 +172,28 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 
 	# Read response.
 	csv_output = resp.processOutputs[0]
+	text = "".join(d for d in csv_output.data)
 
-	data = "".join(d for d in csv_output.data)
-	df = pd.read_csv(io.StringIO(data))
-	df = df.sort_values(_COL_DATE, ascending = True)
-	df[_COL_DATE] = df[_COL_DATE].apply(lambda x: datetime.datetime.strptime(x, _SERVER_DATE_FORMAT).strftime(_OUTPUT_DATE_FORMAT))
-	return df
+	# Parse data into a dataframe.
+	data = pd.read_csv(io.StringIO(text))
 
-end_date = datetime.datetime.today().date()
-for site in smips_sites.sites:
-	eol = "\r" if sys.stdout.isatty() else "\n"
-	pcb = lambda x: print("Downloading %s: %.2f%%" % (site.name, x), end = eol)
+	# Order by date ascending.
+	data = data.sort_values(_COL_DATE, ascending = True)
 
-	data = download_timeseries(site.lon, site.lat, site.start, end_date, pcb)
-	print("\n", end = "")
+	# Change date format to yyyy-MM-dd.
+	data[_COL_DATE] = data[_COL_DATE].apply(lambda x: datetime.datetime.strptime(x, _SERVER_DATE_FORMAT).strftime(_OUTPUT_DATE_FORMAT))
+	return data
 
-	# Write csv to disk.
-	data.to_csv("out/%s.csv" % site.name, index = False)
+if __name__ == "__main__":
+	report_progress = sys.stdout.isatty()
+	for site in smips_sites.sites:
+		if report_progress:
+			pcb = lambda x: print("Downloading %s: %.2f%%" % (site.name, x), end = "\r")
+		else:
+			pcb = lambda _: ...
+			print("Downloading %s..." % site.name)
+		data = download_timeseries(site.lon, site.lat, site.start, site.end, pcb)
+		print("\n", end = "")
+
+		# Write csv to disk.
+		data.to_csv("out/%s.csv" % site.name, index = False)
