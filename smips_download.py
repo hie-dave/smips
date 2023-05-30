@@ -4,14 +4,14 @@
 from owslib.wps import WebProcessingService, ComplexDataInput
 from typing import Callable
 import pandas as pd
-import datetime, io, logging, sys
+import datetime, io, logging, os, sys
 
 import smips_sites
 from smips_common import *
 
 _ENDPOINT="https://funcwps.ternlandscapes.org.au/wps/"
 _TEMPORAL_DRILL = "temporalDrill"
-_SLEEP = 1000 # Sleep interval in ms
+_SLEEP = 5000 # Sleep interval in ms
 
 _MIME_GEO_JSON = "application/vnd.geo+json"
 _SCHEMA_BASE = "http://geojson.org/geojson-spec.html"
@@ -52,6 +52,9 @@ _OUTPUT_DATE_FORMAT = r"%Y-%m-%d"
 
 # Name of the date column in the data returned from the server.
 _COL_DATE = "date"
+
+# Output directory.
+_OUT_DIR = "out-index"
 
 # Set up owslib logging, to set relevant output
 _logger = logging.getLogger("owslib")
@@ -159,7 +162,7 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 		_TEMPORAL_DRILL,
 		mode = _MODE_ASYNC,
 		lineage = True,
-		inputs=[("datasetId", f"{_DATASET_SMIPS}:{_LAYER_SW}"), ("startDate", start_str), ("endDate", end_str), ("point", point)],
+		inputs=[("datasetId", f"{_DATASET_SMIPS}:{_LAYER_SMINDEX}"), ("startDate", start_str), ("endDate", end_str), ("point", point)],
 		output=[("csv", False, "text/csv")]  # Get stats as embedded file in result
 		# output = [("download_link", False, None)]
 	)
@@ -186,6 +189,8 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 
 if __name__ == "__main__":
 	report_progress = sys.stdout.isatty()
+	if not os.path.exists(_OUT_DIR):
+		os.mkdir(_OUT_DIR)
 	for site in smips_sites.sites:
 		if report_progress:
 			pcb = lambda x: print("Downloading %s: %.2f%%" % (site.name, x), end = "\r")
@@ -196,4 +201,4 @@ if __name__ == "__main__":
 		print("\n", end = "")
 
 		# Write csv to disk.
-		data.to_csv("out/%s.csv" % site.name, index = False)
+		data.to_csv("%s/%s.csv" % (_OUT_DIR, site.name), index = False)
