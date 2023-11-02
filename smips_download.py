@@ -54,7 +54,16 @@ _OUTPUT_DATE_FORMAT = r"%Y-%m-%d"
 _COL_DATE = "date"
 
 # Output directory.
-_OUT_DIR = "out-index"
+_OUT_DIR_BASE = "out"
+
+# Output directory for ET layer.
+_OUT_DIR_ET = "et"
+
+# Output directory for SW index layer.
+_OUT_DIR_SWINDEX = "swindex"
+
+# Output directory for SW layer.
+_OUT_DIR_SW = "sw"
 
 # Set up owslib logging, to set relevant output
 _logger = logging.getLogger("owslib")
@@ -65,7 +74,7 @@ _handler.setLevel(logging.WARNING)
 _logger.addHandler(_handler)
 
 # Define a connection to the server.
-_server = WebProcessingService(_ENDPOINT, verbose=False)
+_server = WebProcessingService(_ENDPOINT)
 
 def _describe_server(server: WebProcessingService):
 	"""
@@ -138,7 +147,7 @@ def describe_process(process_name: str):
 	_describe_process(_server, process_name)
 
 def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
-	, pcb: Callable[[float], None]):
+	, dataset: str, layer: str, pcb: Callable[[float], None]):
 	"""
 	Download timeseries data for the specified point starting from the specified
 	date.
@@ -158,11 +167,12 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	end_str = end.strftime(_API_DATE_FORMAT)
 
 	# Submit request (will execute asynchronously).
+	process = _TEMPORAL_DRILL
 	resp = _server.execute(
-		_TEMPORAL_DRILL,
+		process,
 		mode = _MODE_ASYNC,
 		lineage = True,
-		inputs=[("datasetId", f"{_DATASET_SMIPS}:{_LAYER_SMINDEX}"), ("startDate", start_str), ("endDate", end_str), ("point", point)],
+		inputs=[("datasetId", f"{dataset}:{layer}"), ("startDate", start_str), ("endDate", end_str), ("point", point)],
 		output=[("csv", False, "text/csv")]  # Get stats as embedded file in result
 		# output = [("download_link", False, None)]
 	)
@@ -174,7 +184,10 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	pcb(100.0)
 
 	# Read response.
-	csv_output = resp.processOutputs[0]
+	csv_outputs = [x for x in resp.processOutputs if x.identifier == "csv"]
+	if len(csv_outputs) < 1:
+		raise ValueError(f"{process} did not return a csv output")
+	csv_output = csv_outputs[0]
 	text = "".join(d for d in csv_output.data)
 
 	# Parse data into a dataframe.
@@ -187,18 +200,36 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	data[_COL_DATE] = data[_COL_DATE].apply(lambda x: datetime.datetime.strptime(x, _SERVER_DATE_FORMAT).strftime(_OUTPUT_DATE_FORMAT))
 	return data
 
-if __name__ == "__main__":
-	report_progress = sys.stdout.isatty()
-	if not os.path.exists(_OUT_DIR):
-		os.mkdir(_OUT_DIR)
+def download_product(dataset: str, layer: str, out_dir: str, show_progress: bool):
+	os.makedirs(out_dir, exist_ok = True)
+
 	for site in smips_sites.sites:
-		if report_progress:
-			pcb = lambda x: print("Downloading %s: %.2f%%" % (site.name, x), end = "\r")
+		if show_progress:
+			pcb = lambda x: print("Downloading %s %s:%s: %.2f%%" % (site.name, dataset, layer, x), end = "\r")
 		else:
 			pcb = lambda _: ...
-			print("Downloading %s..." % site.name)
-		data = download_timeseries(site.lon, site.lat, site.start, site.end, pcb)
+			print(f"Downloading {site.name} {dataset}:{layer}...")
+		data = download_timeseries(site.lon, site.lat, site.start, site.end
+			, dataset, layer, pcb)
 		print("\n", end = "")
 
 		# Write csv to disk.
-		data.to_csv("%s/%s.csv" % (_OUT_DIR, site.name), index = False)
+		out_file = os.path.join(out_dir, f"{site.name}.csv")
+		data.to_csv(out_file, index = False)
+
+def main():
+	"""
+	Main CLI entrypoint function.
+	"""
+	report_progress = sys.stdout.isatty()
+	products = [
+		(_DATASET_SMIPS, _LAYER_SMINDEX, _OUT_DIR_SWINDEX),
+		(_DATASET_SMIPS, _LAYER_SW, _OUT_DIR_SW),
+		(_DATASET_AET, _LAYER_ET, _OUT_DIR_ET)
+	]
+	for dataset, layer, out_dir_name in products:
+		out_dir = os.path.join(_OUT_DIR_BASE, out_dir_name)
+		download_product(dataset, layer, out_dir, report_progress)
+
+if __name__ == "__main__":
+	main()
