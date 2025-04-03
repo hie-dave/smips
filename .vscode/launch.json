@@ -6,7 +6,7 @@
 	"configurations": [
 		{
 			"name": "smips download",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceFolder}/smips_download.py",
 			"console": "integratedTerminal",

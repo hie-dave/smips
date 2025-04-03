@@ -76,6 +76,12 @@ _logger.addHandler(_handler)
 # Define a connection to the server.
 _server = WebProcessingService(_ENDPOINT)
 
+def log_warning(message: str):
+	"""
+	Log a warning message.
+	"""
+	print(f"WARNING: {message}")
+
 def _describe_server(server: WebProcessingService):
 	"""
 	List all processes and operations supported by the srever. 
@@ -112,6 +118,10 @@ def _describe_process(server: WebProcessingService, process_name: str):
 		print("Process input: data type    = %s" % input.dataType)
 		print("Process input: minOccurs    = %d" % input.minOccurs)
 		print("Process input: maxOccurs    = %d" % input.maxOccurs)
+		if len(input.allowedValues) > 0 and not input.anyValue:
+			print("Process input: allowed values = %s" % input.allowedValues)
+		if input.defaultValue is not None:
+			print("Process input: default value = %s" % input.defaultValue)
 
 	for output in process.processOutputs:
 		print("\n", end = "")
@@ -146,6 +156,31 @@ def describe_process(process_name: str):
 	"""
 	_describe_process(_server, process_name)
 
+def validate_request(process_name: str, inputs: list[tuple[str, str]], outputs: list[tuple[str, bool, str]]):
+	"""
+	Validate a request to the server.
+
+	@param process_name: Name of the process.
+	@param inputs: List of inputs (a list of tuples of (name, value)).
+	@param outputs: List of outputs (a list of tuples of (name, isEmbedded, mimeType)).
+	"""
+	process = _server.describeprocess(process_name)
+	input_names = [x for x, _ in inputs]
+	output_names = [x for x, _, _ in outputs]
+	for input in process.dataInputs:
+		if input.minOccurs > 1 and input.identifier not in input_names:
+			log_warning(f"Possibly missing input; process {process_name} requires {input.title} at least {input.minOccurs} times")
+	for name, value in inputs:
+		if name not in [i.identifier for i in process.dataInputs]:
+			log_warning(f"Possibly redundant input; process {process_name} does not require input {name}")
+		else:
+			process_input = [i for i in process.dataInputs if i.identifier == name][0]
+			if len(process_input.allowedValues) > 0 and not process_input.anyValue and value not in process_input.allowedValues:
+				log_warning(f"Value {value} for input {name} is not in allowedValues {process_input.allowedValues} for input {name}")
+	for name, _, _ in outputs:
+		if name not in [o.identifier for o in process.processOutputs]:
+			log_warning(f"Possibly redundant output; process {process_name} does not require output {name}")
+
 def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	, dataset: str, layer: str, pcb: Callable[[float], None]):
 	"""
@@ -168,13 +203,16 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 
 	# Submit request (will execute asynchronously).
 	process = _TEMPORAL_DRILL
+	inputs = [("datasetId", f"{dataset}:{layer}"), ("startDate", start_str), ("endDate", end_str), ("point", point)]
+	output = [("csv", False, "text/csv")]  # Get stats as embedded file in result
+	# output = [("download_link", False, None)] # Get download link in result
+	validate_request(process, inputs, output)
 	resp = _server.execute(
 		process,
 		mode = _MODE_ASYNC,
 		lineage = True,
-		inputs=[("datasetId", f"{dataset}:{layer}"), ("startDate", start_str), ("endDate", end_str), ("point", point)],
-		output=[("csv", False, "text/csv")]  # Get stats as embedded file in result
-		# output = [("download_link", False, None)]
+		inputs=inputs,
+		output=output
 	)
 
 	# Wait for request to complete.
@@ -186,6 +224,8 @@ def download_timeseries(lon: float, lat: float, start: datetime, end: datetime
 	# Read response.
 	csv_outputs = [x for x in resp.processOutputs if x.identifier == "csv"]
 	if len(csv_outputs) < 1:
+		if len(resp.errors) > 0:
+			raise ValueError(f"{process} returned errors: {"\n".join([e.text for e in resp.errors])}")
 		raise ValueError(f"{process} did not return a csv output")
 	csv_output = csv_outputs[0]
 	text = "".join(d for d in csv_output.data)
