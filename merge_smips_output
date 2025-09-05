@@ -5,8 +5,7 @@
 # a site column.
 #
 
-import os, glob, pandas
-
+import glob, os, pandas, sys
 
 def main(out_dir: str):
     for subdir in os.listdir(out_dir):
@@ -36,5 +35,8 @@ def main(out_dir: str):
         df.to_csv(out_file, index = False, compression="gzip")
 
 if __name__ == "__main__":
-    out_dir = "out"
+    if len(sys.argv) != 2 or not os.path.isdir(sys.argv[1]):
+        print("Usage: merge_site_csv_files <out_dir>")
+        sys.exit(1)
+    out_dir = sys.argv[1]
     main(out_dir)
