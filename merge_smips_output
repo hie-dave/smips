@@ -5,38 +5,62 @@
 # a site column.
 #
 
-import glob, os, pandas, sys
+import argparse, glob, os, pandas, sys
 
-def main(out_dir: str):
-    for subdir in os.listdir(out_dir):
-        if not os.path.isdir(os.path.join(out_dir, subdir)):
+class Options:
+    def __init__(self, directory: str, date_col: str, site_col: str):
+        self.directory = directory
+        self.date_col = date_col
+        self.site_col = site_col
+
+def parse_args(args: list[str]) -> Options:
+    parser = argparse.ArgumentParser(description="Merge site-level CSV files into a single file with a site name column")
+    parser.add_argument("directory", type=str, help="Directory containing child directories. Each child directory should contain CSV files. The site name is the basename of the csv files. Output files will be written to the specified directory as subdir.csv.gz")
+    parser.add_argument("--date-col", type=str, default="date", help="Column name for date")
+    parser.add_argument("--site-col", type=str, default="site", help="Column name for site")
+    parsed = parser.parse_args(args)
+    return Options(parsed.directory, parsed.date_col, parsed.site_col)
+
+def read_file(file: str, opts: Options, compression: str | None = None) -> pandas.DataFrame:
+    # Remove file extension
+    basename = os.path.basename(file)
+    if compression == "gzip":
+        site = str.replace(basename, ".csv.gz", "")
+    else:
+        site = str.replace(basename, ".csv", "")
+
+    df = pandas.read_csv(file, compression=compression)
+    # Add site column
+    df[opts.site_col] = site
+    return df
+
+def main(opts: Options):
+    for subdir in os.listdir(opts.directory):
+        if not os.path.isdir(os.path.join(opts.directory, subdir)):
             continue
 
         var = os.path.basename(subdir)
 
-        var_dir = os.path.join(out_dir, subdir)
+        var_dir = os.path.join(opts.directory, subdir)
 
         dfs = []
         for file in glob.glob(os.path.join(var_dir, "*.csv")):
-            site = os.path.basename(file)
-            # Remove file extension
-            site = os.path.splitext(site)[0]
-            df = pandas.read_csv(file)
-            # Add site column
-            df["site"] = site
-            dfs.append(df)
+            dfs.append(read_file(file, opts))
+        for file in glob.glob(os.path.join(var_dir, "*.csv.gz")):
+            dfs.append(read_file(file, opts, compression="gzip"))
+
+        if len(dfs) == 0:
+            print(f"No output files found in directory: {subdir}")
+            continue
 
         # Concatenate all dataframes (which should have the same columns)
         df = pandas.concat(dfs)
         # Order by site then date.
-        df = df.sort_values(["site", "date"])
+        df = df.sort_values([opts.site_col, opts.date_col])
         # Write to compressed CSV file.
-        out_file = os.path.join(out_dir, f"{var}.csv.gz")
+        out_file = os.path.join(opts.directory, f"{var}.csv.gz")
         df.to_csv(out_file, index = False, compression="gzip")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or not os.path.isdir(sys.argv[1]):
-        print("Usage: merge_site_csv_files <out_dir>")
-        sys.exit(1)
-    out_dir = sys.argv[1]
-    main(out_dir)
+    opts = parse_args(sys.argv[1:])
+    main(opts)
